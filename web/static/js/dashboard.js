@@ -138,8 +138,12 @@ function initThreeViewport() {
     renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     renderer.setClearColor(0x050505);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // Three.js r155+ uses physical light intensity (lux/candela), so the
+    // old 1.0-ish values render nearly-black under ACES tonemapping. Use
+    // linear (no tonemap) + sRGB output, and bump lights up below.
+    renderer.toneMapping = THREE.NoToneMapping;
     renderer.toneMappingExposure = 1.0;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     scene3d = new THREE.Scene();
 
@@ -154,15 +158,21 @@ function initThreeViewport() {
     // Prevent browser context menu on canvas so right-click pan works
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-    // Lights
-    const ambient = new THREE.AmbientLight(0xffffff, 1.2);
+    // Lights — bumped for r170 physical-intensity mode. Ambient carries most
+    // of the fill so textured furniture reads its colours; two directionals
+    // give some shape.
+    const ambient = new THREE.AmbientLight(0xffffff, 3.0);
     scene3d.add(ambient);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2.5);
     dirLight.position.set(10, 20, 10);
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    const fillLight = new THREE.DirectionalLight(0xffffff, 1.5);
     fillLight.position.set(-10, 10, -10);
     scene3d.add(dirLight);
     scene3d.add(fillLight);
+    // A hemisphere light gives sky/ground bounce so ceiling-facing surfaces
+    // don't crush to black.
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x404040, 1.5);
+    scene3d.add(hemi);
 
     // Layer groups
     for (const name of ['floor', 'walls', 'furniture', 'heatmap', 'tx', 'rays', 'buildings', 'roads', 'trees']) {
@@ -735,17 +745,10 @@ async function addFurnitureToScene(f) {
         const sz = f.depth / (size.z || 1);
         obj.scale.set(sx, sy, sz);
 
-        // In schematic mode, override all materials to uniform semi-transparent
-        if (!state.realistic) {
-            const schematicColor = MATERIAL_COLORS[f.material] || MATERIAL_COLORS.wood;
-            const schematicMat = new THREE.MeshStandardMaterial({
-                color: schematicColor, roughness: 0.6,
-                transparent: true, opacity: 0.75,
-            });
-            obj.traverse(child => {
-                if (child.isMesh) child.material = schematicMat;
-            });
-        }
+        // We keep the real 3D-FUTURE PBR textures — the schematic override
+        // used to strip them here, which made every piece look like one flat
+        // color of wood/fabric. Textured furniture over textured walls looks
+        // right in both realistic and schematic modes.
 
         // Recompute bounding box after scale to center properly
         const box2 = new THREE.Box3().setFromObject(obj);
@@ -1821,10 +1824,77 @@ function backToOutdoor() {
     drawOutdoorViewport();
 }
 
+// ─── Full-scene GLB loader ─────────────────────────────────────────
+// When an imported scene (e.g. small-bedroom, uga-arch-thz) has a
+// scene.glb, render the whole mesh in the viewport instead of drawing
+// generic furniture boxes. The GLB is served by our new
+// /api/scenes/<id>/file/<name> route.
+let _importedSceneMesh = null;
+function clearImportedScene() {
+    if (_importedSceneMesh) {
+        scene3d.remove(_importedSceneMesh);
+        _importedSceneMesh.traverse(o => {
+            if (o.geometry) o.geometry.dispose();
+            if (o.material) {
+                (Array.isArray(o.material) ? o.material : [o.material])
+                    .forEach(m => m.dispose && m.dispose());
+            }
+        });
+        _importedSceneMesh = null;
+    }
+}
+async function loadSceneGLB(sceneId) {
+    clearImportedScene();
+    const url = `/api/scenes/${sceneId}/file/scene.glb`;
+    // HEAD to check availability without downloading
+    try {
+        const head = await fetch(url, { method: 'HEAD' });
+        if (!head.ok) return null;
+    } catch { return null; }
+    // If the load response already gave us a furniture list (e.g. apartment-01
+    // with metadata.json), we render per-item textured meshes via
+    // drawSceneViewport → addFurnitureToScene. In that case hide the
+    // pre-baked GLB's TEXTURED sub-meshes (the furniture pieces) so we don't
+    // stack a duplicate on top of them, but keep the ColorVisuals sub-meshes
+    // (walls, floor, ceiling, interior partitions) visible.
+    const sc = state.currentScene;
+    const suppressFurn = !!(sc && sc.room && Array.isArray(sc.room.furniture)
+        && sc.room.furniture.length > 0);
+    return new Promise((resolve) => {
+        gltfLoader.load(
+            url,
+            (gltf) => {
+                const obj = gltf.scene;
+                obj.userData._imported = sceneId;
+                if (suppressFurn) {
+                    obj.traverse(child => {
+                        if (child.isMesh && child.material && child.material.map) {
+                            // Textured mesh = a furniture piece; hide it so the
+                            // per-item textured copy renders alone (and stays
+                            // draggable).
+                            child.visible = false;
+                        }
+                    });
+                }
+                // GLB is Y-up (Three.js native), scene is placed in world XZ frame
+                scene3d.add(obj);
+                _importedSceneMesh = obj;
+                console.log(`[cc] loaded ${sceneId}/scene.glb (${obj.children.length} nodes)`);
+                appendChatMsg('system',
+                    `Loaded ${sceneId}/scene.glb into the viewport.`);
+                resolve(obj);
+            },
+            undefined,
+            (err) => { console.warn('GLB load failed', err); resolve(null); }
+        );
+    });
+}
+
 function applyIndoorResult(result) {
     const room = result.room;
     switchView('indoor');
     resetUI();
+    clearImportedScene();  // remove any previously imported scene mesh
 
     state.currentScene = {
         type: 'indoor',
@@ -1834,10 +1904,20 @@ function applyIndoorResult(result) {
             height: room.height || 3.0,
             polygon: room.polygon || null,
             furniture: room.furniture || [],
+            rooms: room.rooms || result.rooms || [],
         },
         scene_id: result.scene_id,
         xml_path: result.xml_path,
     };
+
+    // If this scene has a scene.glb (imported / classmate's, etc.), render
+    // the full GLB in the viewport in addition to (or instead of) the
+    // generic furniture boxes.
+    if (result.scene_id && Array.isArray(result.files) &&
+        result.files.includes('scene.glb')) {
+        state.currentScene._hasPrebakedGLB = true;
+        loadSceneGLB(result.scene_id);
+    }
 
     // If inside a building, auto-save furniture to parent outdoor scene
     const bldg = state.drillBuilding;
@@ -2033,7 +2113,8 @@ function fetchOSMScene() {
 // ─── Scene Browser ───────────────────────────────────
 
 function refreshSceneList() {
-    fetch('/api/scenes/list')
+    // Returns the promise so callers can await the dropdown being repopulated.
+    return fetch('/api/scenes/list')
     .then(r => r.json())
     .then(scenes => {
         const sel = document.getElementById('scene-select');
@@ -2060,7 +2141,8 @@ function loadSelectedScene() {
     setStatus('loading', `Loading ${displayName}...`);
     showViewportLoader(`Loading ${displayName}...`);
 
-    fetch(`/api/scenes/${sceneId}/load`)
+    // Returns the promise so action handlers can await the scene being in.
+    return fetch(`/api/scenes/${sceneId}/load`)
     .then(r => r.json())
     .then(data => {
         hideViewportLoader();
@@ -2099,6 +2181,7 @@ function loadSelectedScene() {
 
         // Indoor
         switchView('indoor');
+        clearImportedScene();  // clear any previously imported mesh
         state.currentScene = {
             type: 'indoor',
             room: {
@@ -2107,9 +2190,17 @@ function loadSelectedScene() {
                 height: data.height,
                 polygon: data.polygon || null,
                 furniture: data.furniture || [],
+                rooms: data.rooms || [],
             },
             scene_id: sceneId,
         };
+        // If this scene has a scene.glb (imported apartment, classmate's
+        // small-bedroom, uga-arch-thz, etc.), render the full GLB in the
+        // Three.js viewport in addition to the room wireframe.
+        if (Array.isArray(data.files) && data.files.includes('scene.glb')) {
+            state.currentScene._hasPrebakedGLB = true;
+            loadSceneGLB(sceneId);
+        }
 
         document.getElementById('room-dims').value = `${data.width} x ${data.length}`;
         document.getElementById('tx-x').value = (data.width / 2).toFixed(1);
@@ -2361,7 +2452,8 @@ function computeCoverage() {
     const btn = document.getElementById('btn-compute');
     btn.disabled = true;
 
-    const freq = parseFloat(document.getElementById('frequency').value);
+    let freq = parseFloat(document.getElementById('frequency').value);
+    if (!isFinite(freq) || freq <= 0) freq = 5e9;   // guard: no NaN → server crash
     const sc = state.currentScene;
     const isOutdoor = sc && sc.type === 'outdoor';
 
@@ -2456,7 +2548,54 @@ function computeCoverage() {
                     mean_dbm: result.mean_dbm,
                 }, freq, arraySize);
 
-                const engineLabel = result.engine === 'sionna_rt' ? 'Sionna RT' : 'THz Model';
+                // Remember measured stats so the chat agent can quote real
+                // before/after numbers (sent as coverage_history).
+                {
+                    const flat = midGrid.flat();
+                    const covPct = flat.filter(v => v > -80).length / flat.length * 100;
+                    // Per-room mean RSS (apartment scenes carry room bounds),
+                    // so the agent can answer "how much did the bedroom drop".
+                    const roomMeans = {};
+                    const roomsList = (state.currentScene && state.currentScene.room &&
+                                       state.currentScene.room.rooms) || [];
+                    if (roomsList.length && midGrid.length) {
+                        const W = result.room ? result.room.width : parseRoomDims().w;
+                        const L = result.room ? result.room.length : parseRoomDims().l;
+                        const ny = midGrid.length, nx = midGrid[0].length;
+                        for (const r of roomsList) {
+                            let s = 0, n = 0;
+                            for (let j = 0; j < ny; j++) {
+                                const y = (j + 0.5) * L / ny;
+                                if (y < r.y0 || y >= r.y1) continue;
+                                for (let i = 0; i < nx; i++) {
+                                    const x = (i + 0.5) * W / nx;
+                                    if (x < r.x0 || x >= r.x1) continue;
+                                    s += midGrid[j][i]; n++;
+                                }
+                            }
+                            if (n) roomMeans[r.id] = +(s / n).toFixed(1);
+                        }
+                    }
+                    state.coverageHistory = state.coverageHistory || [];
+                    state.coverageHistory.push({
+                        rooms: roomMeans,
+                        freq_ghz: +(freq / 1e9).toFixed(2),
+                        tx: {
+                            x: +(parseFloat(document.getElementById('tx-x').value) || 0).toFixed(2),
+                            y: +(parseFloat(document.getElementById('tx-y').value) || 0).toFixed(2),
+                            z: +(parseFloat(document.getElementById('tx-height').value) || 0).toFixed(2),
+                        },
+                        engine: result.engine || 'unknown',
+                        mean_dbm: +result.mean_dbm.toFixed(1),
+                        min_dbm: +result.min_dbm.toFixed(1),
+                        max_dbm: +result.max_dbm.toFixed(1),
+                        coverage_pct: +covPct.toFixed(1),
+                    });
+                    if (state.coverageHistory.length > 8) state.coverageHistory.shift();
+                }
+
+                // Backend reports e.g. "Sionna RT (RadioMapSolver)" — match loosely.
+                const engineLabel = String(result.engine || '').toLowerCase().includes('sionna') ? 'Sionna RT' : 'THz Model';
                 document.getElementById('stat-engine').textContent = engineLabel;
                 setStatus('ready', `Coverage computed (${result.slices.length} Z slices, ${engineLabel})`);
                 btn.disabled = false;
@@ -2906,6 +3045,9 @@ async function sendChat() {
         const chatPayload = {
             messages: chatMessages,
             scene: state.currentScene,
+            // Last few coverage results (newest last) so the agent can quote
+            // real before/after numbers instead of guessing or asking.
+            coverage_history: state.coverageHistory || [],
             stream: true,   // dispatch async + SSE-stream agent thinking
         };
         if (state.drillBuilding) chatPayload.inside_building = state.drillBuilding;
@@ -2996,7 +3138,7 @@ function _renderChatFinal(data) {
             'set_tx_position': 3, 'set_tx_power': 3, 'set_frequency': 3,
             'configure_antenna': 3, 'set_ap_orientation': 3,
             'move_furniture': 4, 'rotate_furniture': 4, 'remove_furniture': 4,
-            'load_scene': 4, 'delete_scene': 4,
+            'load_scene': 4, 'delete_scene': 4, 'create_apartment': 2,
             'create_outdoor': 4, 'fetch_osm': 4,
             'compute_coverage': 5,
         };
@@ -3191,13 +3333,32 @@ async function executeChatAction(action) {
             if (state.currentScene && window._scheduleAutoCompute) window._scheduleAutoCompute();
         }
     } else if (action.type === 'set_frequency') {
-        // Change carrier frequency in GHz.
+        // Change carrier frequency. LLM passes GHz — the select stores Hz
+        // strings ("3.5e9", "28e9", ...). Convert to Hz, and if the value
+        // isn't already in the dropdown, add an <option> for it so setting
+        // the value succeeds (otherwise <select> silently clears to "").
         const el = document.getElementById('frequency');
-        if (el && action.ghz !== undefined) {
-            el.value = String(action.ghz);
+        if (el && action.ghz !== undefined && action.ghz !== null) {
+            const ghz = Number(action.ghz);
+            if (!isFinite(ghz) || ghz <= 0) {
+                appendChatMsg('system', `Invalid frequency: ${action.ghz}`);
+                return;
+            }
+            const hzStr = String(ghz * 1e9);
+            let hasOpt = false;
+            for (const opt of el.options) {
+                if (Number(opt.value) === ghz * 1e9) { hasOpt = true; break; }
+            }
+            if (!hasOpt) {
+                const o = document.createElement('option');
+                o.value = hzStr;
+                o.textContent = `${ghz} GHz`;
+                el.appendChild(o);
+            }
+            el.value = hzStr;
             el.dispatchEvent(new Event('input', {bubbles:true}));
             el.dispatchEvent(new Event('change', {bubbles:true}));
-            appendChatMsg('system', `Carrier frequency set to ${action.ghz} GHz`);
+            appendChatMsg('system', `Carrier frequency set to ${ghz} GHz`);
             if (state.currentScene && window._scheduleAutoCompute) window._scheduleAutoCompute();
         }
     } else if (action.type === 'move_furniture') {
@@ -3350,16 +3511,84 @@ async function executeChatAction(action) {
             appendChatMsg('system', `No material specified.`);
             return;
         }
-        state.pendingMaterials = state.pendingMaterials || {};
-        state.pendingMaterials[surface] = mat;
-        appendChatMsg('system',
-            `${surface} material set to ${mat} — will apply the next time you create a scene ('New Scene' or 'Build …' via chat).`);
+        // Pre-baked apartment scenes carry a scene.xml that Sionna RT reads
+        // directly, so rewrite the surface's ITU material there and
+        // recompute. Other scenes keep the old "apply on next build" path.
+        const sid = state.currentScene && state.currentScene.scene_id;
+        let applied = false;
+        if (sid) {
+            try {
+                const resp = await fetch(`/api/scenes/${sid}/material`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ surface, material: mat }),
+                });
+                const d = await resp.json();
+                if (resp.ok && !d.error) {
+                    applied = true;
+                    appendChatMsg('system',
+                        `${sid}: ${d.surface} material → ${d.material} (${d.shapes_changed} wall panels). Recomputing…`);
+                    if (window._scheduleAutoCompute) window._scheduleAutoCompute();
+                } else if (resp.status !== 404) {
+                    appendChatMsg('system', `Material change failed: ${d.error || resp.status}`);
+                    return;
+                }
+            } catch (e) {
+                appendChatMsg('system', `Material change failed: ${e.message}`);
+                return;
+            }
+        }
+        if (!applied) {
+            state.pendingMaterials = state.pendingMaterials || {};
+            state.pendingMaterials[surface] = mat;
+            appendChatMsg('system',
+                `${surface} material set to ${mat} — will apply the next time you create a scene ('New Scene' or 'Build …' via chat).`);
+        }
     } else if (action.type === 'compute_coverage') {
         computeCoverage();
     } else if (action.type === 'load_scene') {
         appendChatMsg('system', `Loading scene: ${action.scene_id}...`);
         document.getElementById('scene-select').value = action.scene_id;
         loadSelectedScene();
+    } else if (action.type === 'create_apartment') {
+        // Multi-room apartment: server builds walls/partitions/furniture
+        // (scene.xml + scene.glb + metadata.json), then we load it like
+        // any saved scene. Generation takes ~10-40 s (3D-FUTURE meshes).
+        const rooms = Array.isArray(action.rooms) ? action.rooms : [];
+        if (!rooms.length) {
+            appendChatMsg('system', 'create_apartment: no rooms given.');
+            return;
+        }
+        const desc = rooms.map(r => `${r.type}${r.width && r.depth ? ` ${r.width}×${r.depth}` : ''}`).join(', ');
+        appendChatMsg('system', `Building apartment (${rooms.length} rooms: ${desc})… this takes a moment.`);
+        showViewportLoader('Generating apartment…');
+        try {
+            const resp = await fetch('/api/scenes/apartment/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    rooms,
+                    name: action.name || undefined,
+                    height: action.height || undefined,
+                    seed: action.seed || undefined,
+                }),
+            });
+            const d = await resp.json();
+            hideViewportLoader();
+            if (!resp.ok || d.error) {
+                appendChatMsg('system', `Apartment generation failed: ${d.error || resp.status}`);
+                return;
+            }
+            appendChatMsg('system',
+                `Built ${d.scene_id}: ${d.width}×${d.length}×${d.height} m, ` +
+                `${d.rooms.length} rooms, ${d.n_furniture} furniture pieces.`);
+            await refreshSceneList();
+            document.getElementById('scene-select').value = d.scene_id;
+            await loadSelectedScene();
+        } catch (e) {
+            hideViewportLoader();
+            appendChatMsg('system', `Apartment generation failed: ${e.message}`);
+        }
     } else if (action.type === 'delete_scene') {
         appendChatMsg('system', `Deleting scene: ${action.scene_id}...`);
         try {
@@ -3859,6 +4088,37 @@ window._showCategoryVariants = showCategoryVariants;
 window._backToCategories = backToCategories;
 window._addSpecificModel = addSpecificModel;
 window._toggleChat = toggleChat;
+
+// Focus-mode pane toggles — hide the left sidebar or the bottom analytics
+// panel to see the viewport / chat unobstructed. State survives reload.
+function togglePane(which) {
+    const cls = which === 'sidebar' ? 'hide-sidebar' : 'hide-analytics';
+    const on = document.body.classList.toggle(cls);
+    try { localStorage.setItem(`pane-${which}-hidden`, on ? '1' : '0'); } catch {}
+    // The ResizeObserver on .viewport re-fits the Three.js canvas, but the
+    // Plotly charts in the bottom panel were laid out at 0×0 while hidden
+    // and only re-measure on a window resize — so re-fit them explicitly
+    // once the panel is back in the layout.
+    if (!on) {
+        requestAnimationFrame(() => {
+            for (const id of ['ber-chart', 'coverage-hist', 'pdp-chart']) {
+                const el = document.getElementById(id);
+                if (el && el.data && window.Plotly) {
+                    try { Plotly.Plots.resize(el); } catch {}
+                }
+            }
+            window.dispatchEvent(new Event('resize'));
+        });
+    }
+}
+window._togglePane = togglePane;
+// Restore last state on load
+try {
+    if (localStorage.getItem('pane-sidebar-hidden') === '1')
+        document.body.classList.add('hide-sidebar');
+    if (localStorage.getItem('pane-analytics-hidden') === '1')
+        document.body.classList.add('hide-analytics');
+} catch {}
 window._sendChat = sendChat;
 window._enterSelectedBuilding = enterSelectedBuilding;
 window._openAntennaModal = openAntennaModal;

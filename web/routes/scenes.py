@@ -2,6 +2,8 @@
 
 import json
 import logging
+import re
+import sys
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -19,6 +21,153 @@ from routes.shared import OUTPUTS_DIR, GENERIC_FURNITURE_DIMS, _get_catalog, _re
 logger = logging.getLogger(__name__)
 
 scenes_bp = Blueprint("scenes", __name__)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
+
+
+def _next_apartment_id() -> str:
+    n = 1
+    while (OUTPUTS_DIR / f"apartment-{n:02d}").exists():
+        n += 1
+    return f"apartment-{n:02d}"
+
+
+_ITU_MATERIALS = {
+    "brick", "ceiling_board", "chipboard", "concrete", "floorboard", "glass",
+    "marble", "medium_dry_ground", "metal", "plasterboard", "plywood",
+    "very_dry_ground", "wet_ground", "wood",
+}
+_MATERIAL_ALIASES = {"drywall": "plasterboard", "gypsum": "plasterboard",
+                     "itu_metal": "metal", "steel": "metal", "stone": "marble"}
+_SURFACE_SHAPE_IDS = {
+    # surface name -> predicate on <shape id="...">
+    "interior_wall": lambda sid: sid.startswith("iw_"),
+    "wall":          lambda sid: sid.startswith("iw_") or sid.startswith("wall_"),
+    "exterior_wall": lambda sid: sid.startswith("wall_"),
+    "floor":         lambda sid: sid == "floor",
+    "ceiling":       lambda sid: sid == "ceiling",
+}
+
+
+@scenes_bp.route("/api/scenes/<scene_id>/material", methods=["POST"])
+def set_scene_material(scene_id):
+    """Rewrite the ITU material of a surface class in a pre-baked
+    scene.xml so the next Sionna RT run uses it.
+
+    Body: {surface: interior_wall|wall|exterior_wall|floor|ceiling,
+           material: <ITU name or alias>}
+    """
+    scene_dir = OUTPUTS_DIR / scene_id
+    xml_path = scene_dir / "scene.xml"
+    if not xml_path.exists():
+        return jsonify({"error": "scene has no scene.xml"}), 404
+    data = request.json or {}
+    surface = str(data.get("surface") or "wall").lower()
+    pred = _SURFACE_SHAPE_IDS.get(surface)
+    if pred is None:
+        return jsonify({"error": f"unknown surface {surface!r}"}), 400
+    mat = str(data.get("material") or "").lower().strip()
+    mat = _MATERIAL_ALIASES.get(mat, mat)
+    if mat not in _ITU_MATERIALS:
+        return jsonify({"error": f"unknown material {mat!r}; ITU names: "
+                        f"{sorted(_ITU_MATERIALS)}"}), 400
+
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    bsdf_id = f"{mat}_mat"
+    if root.find(f"./bsdf[@id='{bsdf_id}']") is None:
+        b = ET.SubElement(root, "bsdf", type="itu-radio-material", id=bsdf_id)
+        ET.SubElement(b, "string", name="type", value=mat)
+        # Keep bsdfs ahead of shapes so <ref> resolves when Mitsuba parses.
+        root.remove(b)
+        first_shape = next((i for i, c in enumerate(list(root)) if c.tag == "shape"), len(root))
+        root.insert(first_shape, b)
+    changed = 0
+    for shape in root.findall("./shape"):
+        if pred(shape.get("id", "")):
+            ref = shape.find("ref")
+            if ref is not None and ref.get("id") != bsdf_id:
+                ref.set("id", bsdf_id)
+                changed += 1
+    tree.write(xml_path, encoding="unicode", xml_declaration=True)
+    logger.info("scene %s: %s -> %s (%d shapes)", scene_id, surface, mat, changed)
+    return jsonify({"scene_id": scene_id, "surface": surface,
+                    "material": mat, "shapes_changed": changed})
+
+
+@scenes_bp.route("/api/scenes/apartment/generate", methods=["POST"])
+def generate_apartment_scene():
+    """Build a multi-room apartment (walls + interior partitions + 3D-FUTURE
+    furniture) from a room list and register it as a loadable scene.
+
+    Body: {rooms: [{id?, type, width, depth}], name?, height?, seed?}
+      type ∈ living_room | kitchen | bedroom | bathroom | balcony
+    """
+    data = request.json or {}
+    rooms = data.get("rooms") or []
+    if not isinstance(rooms, list) or not rooms:
+        return jsonify({"error": "rooms must be a non-empty list"}), 400
+    if len(rooms) > 12:
+        return jsonify({"error": "at most 12 rooms"}), 400
+
+    name = str(data.get("name") or "").strip().lower().replace(" ", "-")
+    scene_id = _SLUG_RE.sub("", name) if name else _next_apartment_id()
+    if not scene_id:
+        scene_id = _next_apartment_id()
+    # A repeated "build me an apartment" must not fail on a name clash:
+    # suffix -2, -3, ... unless the caller explicitly asks to overwrite.
+    if (OUTPUTS_DIR / scene_id).exists() and not data.get("overwrite"):
+        base, n = scene_id, 2
+        while (OUTPUTS_DIR / f"{base}-{n}").exists():
+            n += 1
+        scene_id = f"{base}-{n}"
+    out_dir = OUTPUTS_DIR / scene_id
+
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    try:
+        from scripts.generate_apartment import generate_apartment
+        meta = generate_apartment(
+            rooms, out_dir,
+            height=float(data.get("height") or 3.0),
+            seed=int(data.get("seed") or 42),
+            log=logger.info,
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.exception("apartment generation failed")
+        return jsonify({"error": f"generation failed: {e}"}), 500
+
+    return jsonify({
+        "scene_id": scene_id,
+        "width": meta["width"], "length": meta["length"], "height": meta["height"],
+        "rooms": meta["rooms"],
+        "n_furniture": len(meta["furniture"]),
+    })
+
+
+@scenes_bp.route("/api/scenes/<scene_id>/file/<path:filename>")
+def scene_file(scene_id: str, filename: str):
+    """Serve a static asset (viewer.html, scene.glb, coverage_heatmap.png, ...)
+    from an outputs/<scene_id>/ folder. Used to open imported scenes'
+    standalone Three.js viewers or expose their GLB / coverage assets.
+
+    Path traversal is blocked — filename must resolve inside the scene dir.
+    """
+    scene_dir = OUTPUTS_DIR / scene_id
+    if not scene_dir.is_dir():
+        return jsonify({"error": "scene not found"}), 404
+    # Resolve target and confirm it stays inside scene_dir (blocks ../ escapes)
+    target = (scene_dir / filename).resolve()
+    try:
+        target.relative_to(scene_dir.resolve())
+    except ValueError:
+        return jsonify({"error": "invalid path"}), 400
+    if not target.exists():
+        return jsonify({"error": f"{filename} not in scene"}), 404
+    return send_file(target)
 
 
 @scenes_bp.route("/api/scenes/list")

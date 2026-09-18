@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import os
+import sys
 import subprocess
 import time
 from pathlib import Path
@@ -110,9 +111,9 @@ def _build_invoke_env(task: dict, condition: str) -> dict:
     # interpreter so the agent (instructed by SKILL.md / task prompt) can
     # invoke it as `$RF_SIONNA_PY simulation.py` instead of the default
     # `python3` (which would fall back to FSPL on ImportError).
-    _sionna_py = os.environ.get(
-        "RF_SIONNA_PY",
-        "/home/myid/rs01778/miniconda3/envs/sionna/bin/python")
+    # Default to the interpreter running the benchmark (activate the
+    # `sionna` conda env first), overridable via RF_SIONNA_PY.
+    _sionna_py = os.environ.get("RF_SIONNA_PY") or sys.executable
     if Path(_sionna_py).exists():
         env["RF_SIONNA_PY"] = _sionna_py
 

@@ -77,6 +77,80 @@ the AP at (3, 2.5, 2.8), then compute coverage at 5 GHz."*
 You should see the room render, furniture drop in, AP marker move,
 and a coverage heatmap appear — all driven by one prompt.
 
+Want a whole home instead of one room? See the next section.
+
+---
+
+## New: multi-room 3D scenes from one sentence
+
+Describe a home in plain language and the dashboard builds it — rooms,
+interior partitions with doorways, room-appropriate 3D furniture — then
+ray-traces it with Sionna RT. No floor plan, no XML, no coordinates.
+
+**1. Build it.** Type into the chat panel:
+
+```
+Build an apartment with a living room, a kitchen, two bedrooms and a
+bathroom, and load it.
+```
+
+In 20–40 s the scene appears in the viewport and in the scene dropdown
+(as `apartment-NN`, or the name you give it: *"…call it family-flat"*).
+
+**2. Say as much or as little as you like.**
+
+| You say | What happens |
+|---|---|
+| *"a living room and a bedroom"* | Typical sizes are used (living room 5×4 m, kitchen 3×4, bedroom 4×3.5, bathroom 2×3.5, balcony 3×2; 3 m ceiling) |
+| *"a 6 by 4.5 m living room and two 4 by 3.5 m bedrooms"* | Your dimensions are used |
+| *"…with a 2.7 m ceiling"* | Sets the height |
+| *"put some furniture in each room"* | Always done: sofa / coffee table / TV stand in the living room, bed / nightstand / wardrobe / desk in bedrooms, table and chairs in the kitchen, … (real 3D-FUTURE meshes if the dataset is installed, boxes otherwise) |
+
+Room types: `living_room`, `kitchen`, `bedroom`, `bathroom`, `balcony`.
+Rooms are placed in a two-column grid in the order you list them, so
+name the living room first. Walls shared by two rooms become
+plasterboard partitions with a 0.9 m doorway, and furniture is kept
+clear of the doorways.
+
+**3. Experiment on it, one sentence at a time.**
+
+```
+Put a 5 GHz access point on the ceiling in the middle of the living room and compute the coverage.
+Move the access point to the living-room corner farthest from the bedroom and recompute.
+How much did the mean signal in the bedroom drop compared with the previous run?
+Change the interior wall to concrete and recompute.
+Compare the bedroom signal before and after the concrete wall.
+Change the frequency to 2.4 GHz and recompute.
+Using the measured coverage, what SNR and data rate can a WiFi 6 user expect in the bedroom, assuming an 80 MHz channel and a 7 dB noise figure?
+```
+
+Every answer about "how much did it change" quotes the ray-traced
+measurements — whole-scene and **per-room** mean RSS from the last few
+runs — not an estimate. Ask for a change and for its numbers in two
+separate messages: the reply to *"…and recompute"* is written before
+that run has finished. Furniture stays draggable in the viewport, so
+you can also rearrange the generated home by hand.
+
+**Without the chat** (scripting, batch generation):
+
+```bash
+# presets: 1br | studio | 2br | 3br
+PYTHONPATH=. python scripts/generate_apartment.py --preset 2br --out-dir web/outputs/my-flat
+
+# or any room list, through the running dashboard
+curl -X POST http://localhost:8080/api/scenes/apartment/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "my-flat", "rooms": [
+        {"id": "living",   "type": "living_room", "width": 5.5, "depth": 4.5},
+        {"id": "bedroom1", "type": "bedroom",     "width": 4.0, "depth": 3.5},
+        {"id": "bedroom2", "type": "bedroom",     "width": 4.5, "depth": 3.5}]}'
+```
+
+Each scene is a folder under `web/outputs/<name>/` holding `scene.xml`
+(Mitsuba / Sionna RT, ITU radio materials), `scene.glb` (viewport) and
+`metadata.json` (rooms + furniture); it can be loaded straight into
+your own Sionna scripts with `sionna.rt.load_scene(".../scene.xml")`.
+
 ---
 
 ## Bring your own LLM
@@ -99,11 +173,11 @@ and the full list of chat actions.
 
 ---
 
-## What the chat can do (17 actions)
+## What the chat can do (18 actions)
 
 | Category | Examples |
 |---|---|
-| **Scene** | `Build a 6x5 room`, `Change ceiling to 3.5 m`, `Change walls to drywall` |
+| **Scene** | `Build a 6x5 room`, `Build an apartment with a living room and two bedrooms`, `Change ceiling to 3.5 m`, `Change the interior wall to concrete` |
 | **Furniture** | `Add a sofa and two chairs`, `Move the desk to (3, 2)`, `Rotate the chair 90°`, `Remove the bookcase` |
 | **AP / antenna** | `Move the AP to (5, 4, 2.8)`, `Set TX power to 15 dBm`, `Change frequency to 28 GHz`, `Use a 4x4 tr38901 antenna`, `Point the AP north with 15° downtilt` |
 | **Simulation** | `Compute the coverage map` |
@@ -112,6 +186,16 @@ and the full list of chat actions.
 Chat and direct 3D interaction (drag / rotate / delete) share the same
 scene state — you can seed a room by chat and then hand-tune it in the
 viewport.
+
+**Coverage engine.** Scenes that ship a Mitsuba/Sionna `scene.xml`
+(generated apartments, imported scenes) are solved with
+`sionna.rt.RadioMapSolver` — walls, reflections and transmission through
+ITU materials are ray-traced, and the stats panel reports
+`Sionna RT`. Scenes without one fall back to a fast analytical model.
+After every run the measured whole-scene and per-room mean RSS are fed
+back to the chat agents, so "how did it change?" questions are answered
+from data.
+
 
 ---
 
@@ -142,6 +226,9 @@ agentic-sionna/
 │   ├── static/                     #   Three.js viewport + CSS
 │   └── templates/dashboard.html
 ├── src/                            # Runtime libraries (models, optimizer, exporters, wireless)
+│   └── wireless/sionna_rt_backend.py  # RadioMapSolver backend used by the dashboard
+├── scripts/
+│   └── generate_apartment.py       # Multi-room apartment generator (XML + GLB + metadata)
 ├── benchmark/                      # Benchmark suite (verifier + tasks + oracles + metrics)
 │   ├── verifier.py                 #   3-layer verifier
 │   ├── tasks/                      #   Task specs (100+ scene-gen, RT, PHY, opt, system tasks)
@@ -165,9 +252,12 @@ agentic-sionna/
 The `benchmark/` folder is self-contained.
 
 ```bash
-# Run one trial
+# Run one trial (output goes to benchmark/results/<label>/)
 PYTHONPATH=. python benchmark/run_benchmark.py \
-    --skill rf-simulator --task N1_cov_box_one_screen --k 1
+    --label n1_demo \
+    --tasks-file benchmark/tasks/_sources/n1_v2.json \
+    --task-ids N1_cov_box_one_screen \
+    --conditions with_skill --k 1
 
 # Compute continuous quality metrics on existing trial output
 python benchmark/compute_metrics.py

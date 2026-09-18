@@ -52,6 +52,12 @@ DASHBOARD_CHAT_API_KEY=any-non-empty-string
 DASHBOARD_CHAT_MODEL=llama3.1
 ```
 
+Large models behind a slow gateway can take more than a minute per reply
+(the worker prompt carries the whole skill, ~35k tokens). The per-call
+HTTP timeout defaults to 300 s; override it with
+`DASHBOARD_CHAT_TIMEOUT=<seconds>`. The badge next to "AI ASSISTANT"
+shows whatever `DASHBOARD_CHAT_MODEL` is set to.
+
 `.env` is gitignored — never commit real keys. If either the URL or key
 is missing at startup, the chat panel returns *"Chat is disabled …"*
 rather than falling back to any shared account.
@@ -79,7 +85,8 @@ configure_antenna / set_ap_orientation → move/rotate/remove_furniture
 |---|---|
 | `set_room_size {width, length}` | "Make the room 8 x 6 meters" |
 | `set_room_height {height}` | "Change ceiling to 3.5 m" |
-| `set_material {surface, material}` | "Change the walls to drywall" |
+| `create_apartment {rooms: [{id, type, width, depth}], name?, height?}` | "Build an apartment with a living room, a kitchen and two bedrooms" |
+| `set_material {surface, material}` | "Change the interior wall to concrete" — `surface` is `interior_wall`, `exterior_wall`, `wall`, `floor` or `ceiling`; `material` is an ITU name (`plasterboard`, `brick`, `concrete`, `wood`, `glass`, `marble`, `metal`). On a loaded scene with a `scene.xml` the change is applied immediately and coverage is recomputed |
 | `add_furniture {items: [{quantity, category}]}` | "Add a sofa and 2 chairs" |
 | `move_furniture {category, x, y}` | "Move the desk to (3, 2)" |
 | `rotate_furniture {category, absolute_deg or delta_deg}` | "Rotate the chair 90°" |
@@ -99,6 +106,29 @@ Coordinates are clamped to room bounds — asking for the AP at
 (100, 100, 100) in a 6×5×3 room pins it to the corner and adds a
 "clamped from … to …" note to the chat.
 
+### Multi-room apartments
+
+`create_apartment` calls `POST /api/scenes/apartment/generate`, which runs
+`scripts/generate_apartment.py`: rooms (`living_room`, `kitchen`,
+`bedroom`, `bathroom`, `balcony`) are laid out in a two-column grid in
+list order, shared walls become plasterboard partitions with a 0.9 m
+doorway, and each room gets type-appropriate furniture that is kept clear
+of the doorways. The scene is written as `scene.xml` (Sionna RT),
+`scene.glb` (viewport) and `metadata.json` (draggable furniture), then
+loaded. A repeated name gets a `-2`, `-3`, … suffix instead of failing.
+
+### Coverage engine and measured results
+
+If the loaded scene has a `scene.xml`, coverage is ray-traced with
+`sionna.rt.RadioMapSolver` (3 bounces, reflection + refraction) and the
+stats panel shows `Sionna RT`; otherwise a fast analytical model is used.
+After each run the dashboard records frequency, AP position, whole-scene
+mean / min / max RSS, coverage % above −80 dBm and the mean RSS of every
+room, and sends the last few runs with each chat message. Ask for a
+change and the numbers in two separate messages ("…and recompute", then
+"how much did the bedroom drop?") — the reply to the first message is
+written before its run has finished.
+
 Positions of category "lamp" / "chandelier" / "pendant" / "ceiling_fan"
 are auto-mounted at ceiling height instead of the floor.
 
@@ -116,6 +146,7 @@ The 3D viewport supports:
 | `Delete` / `Backspace` | Remove selected |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo |
 | Sidebar `tx-x` / `tx-y` / `tx-height` | Manual AP position |
+| ◀ tab on the sidebar edge / ▼ tab above the bottom panel | Collapse or restore that panel (remembered across reloads) |
 
 Chat and direct interaction share scene state, so you can chat to seed
 a room, then hand-tune, then chat "compute coverage".
@@ -145,6 +176,14 @@ LAN IP: `http://<server-ip>:8080`.
 **Chat says "Chat is disabled — please set …"** → `.env` is missing or
 incomplete. Copy `.env.example`, fill in the three `DASHBOARD_CHAT_*`
 vars, restart the dashboard.
+
+**Chat replies `[worker error] TimeoutError: timed out`** → the LLM
+endpoint did not answer within `DASHBOARD_CHAT_TIMEOUT` (default 300 s).
+Raise it, or pick a faster model.
+
+**Edited `templates/dashboard.html` but nothing changed** → Flask caches
+templates when not in debug mode; restart the dashboard. Changes under
+`static/` only need a hard refresh.
 
 **Furniture catalog is empty** → `FUTURE_DATASET_PATH` not set or points
 to an invalid directory. Verify `model_info.json` and per-model

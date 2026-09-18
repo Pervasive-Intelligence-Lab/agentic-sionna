@@ -239,7 +239,5 @@ benchmark/                            # Evaluation infrastructure (NOT runtime s
 ├── run_heldout.sh                    # Run-once held-out test evaluation
 ├── improvement_loop.py               # Auto-improvement orchestrator (scaffold)
 ├── tool_call_proxy.py                # OpenAI-compat repair proxy
-├── queue_local_llms.sh               # Sequential vLLM model swap
-├── vast_setup.sh                     # vast.ai bootstrap
 └── _studies_archive/                 # Per-version archives + iteration_log.md
 ```

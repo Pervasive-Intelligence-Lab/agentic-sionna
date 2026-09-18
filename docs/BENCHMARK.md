@@ -31,17 +31,20 @@ kept locally but excluded from git (600+ MB). To regenerate:
 
 ```bash
 # Run one condition on one task, k=1 trial
+# (output goes to benchmark/results/<label>/)
 PYTHONPATH=. python benchmark/run_benchmark.py \
-    --skill rf-simulator \
-    --condition with_skill \
-    --task N1_cov_box_one_screen \
+    --label n1_demo \
+    --tasks-file benchmark/tasks/_sources/n1_v2.json \
+    --task-ids N1_cov_box_one_screen \
+    --conditions with_skill \
     --k 1
 
-# Or run a full sweep (takes hours; requires Sionna + GPU)
+# Or run a full sweep over the default task set (takes hours; requires
+# Sionna + GPU). --split defaults to train; the held-out test split
+# additionally needs --i-understand-held-out.
 PYTHONPATH=. python benchmark/run_benchmark.py \
-    --skill rf-simulator \
-    --conditions with_skill,no_skill,self_gen \
-    --tasks all \
+    --label full_sweep \
+    --conditions with_skill no_skill self_gen \
     --k 5
 ```
 

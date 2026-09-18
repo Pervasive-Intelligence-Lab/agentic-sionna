@@ -350,6 +350,14 @@
 
         <div class="workspace">
             <div class="viewport">
+                <button class="pane-tab pane-tab-sidebar"
+                        id="toggle-sidebar-btn"
+                        onclick="window._togglePane('sidebar')"
+                        title="Hide/show left panel"></button>
+                <button class="pane-tab pane-tab-analytics"
+                        id="toggle-analytics-btn"
+                        onclick="window._togglePane('analytics')"
+                        title="Hide/show bottom panel"></button>
                 <button class="back-btn" id="back-btn" onclick="window._backToOutdoor()">&#8592; Back to outdoor</button>
                 <div class="furniture-selected-hint" id="furniture-move-hint">Drag to move. Drag ring to rotate. Del to remove. Ctrl+Z undo. Ctrl+Shift+Z redo.</div>
                 <div class="building-tooltip" id="building-tooltip"></div>
@@ -435,7 +443,7 @@
         <aside class="chat-panel">
             <div class="chat-panel-header">
                 <span>AI ASSISTANT</span>
-                <span class="chat-model-tag" id="chat-model-tag">Sonnet 4.6</span>
+                <span class="chat-model-tag" id="chat-model-tag">{{ chat_model or "LLM" }}</span>
             </div>
             <div class="chat-messages chat-panel-messages" id="chat-messages">
                 <div class="chat-msg system">Ask me about Sionna, RF propagation, coverage, BER, or the current scene.</div>

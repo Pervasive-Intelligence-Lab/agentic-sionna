@@ -9,7 +9,7 @@ in the verifier). Also serves as a visual sanity check of:
     noisy mess?)
 
 Run with the conda env python:
-  /home/myid/rs01778/miniconda3/envs/sionna/bin/python \
+  $RF_SIONNA_PY \
     benchmark/_smoke_rt/run_n1_reference.py
 """
 from __future__ import annotations

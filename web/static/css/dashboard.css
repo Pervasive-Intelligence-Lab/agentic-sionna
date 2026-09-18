@@ -119,6 +119,57 @@
             overflow: hidden;
             min-height: 0;
         }
+        /* Collapsed left sidebar: drop to a 2-column grid so .workspace is
+           auto-placed into the 1fr column (a 0-width first column would
+           swallow the viewport instead). */
+        body.hide-sidebar .main-area {
+            grid-template-columns: minmax(0, 1fr) 340px;
+        }
+        body.hide-sidebar .sidebar { display: none; }
+        body.hide-analytics .analysis-panel { display: none; }
+
+        /* Edge tabs: small triangle handles sitting on the panel boundaries.
+           Both live inside .viewport, whose left edge borders the sidebar
+           and whose bottom edge borders the analysis panel. */
+        .pane-tab {
+            position: absolute;
+            z-index: 7;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            font-size: 9px;
+            line-height: 1;
+            background: rgba(17, 17, 17, 0.9);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-subtle);
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.12s ease, border-color 0.12s ease;
+        }
+        .pane-tab:hover { color: var(--text-primary); border-color: var(--accent-beige); }
+        .pane-tab-sidebar {
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 14px;
+            height: 56px;
+            border-left: none;
+            border-radius: 0 6px 6px 0;
+        }
+        .pane-tab-analytics {
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 56px;
+            height: 14px;
+            border-bottom: none;
+            border-radius: 6px 6px 0 0;
+        }
+        .pane-tab-sidebar::before { content: "\25C0"; }
+        body.hide-sidebar .pane-tab-sidebar::before { content: "\25B6"; }
+        .pane-tab-analytics::before { content: "\25BC"; }
+        body.hide-analytics .pane-tab-analytics::before { content: "\25B2"; }
 
         .sidebar {
             background-color: var(--bg-deep);

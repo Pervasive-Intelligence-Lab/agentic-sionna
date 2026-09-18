@@ -176,7 +176,7 @@ def _cleanup_stale_jobs() -> None:
 # Output directory
 # ─────────────────────────────────────────────────────────
 
-OUTPUTS_DIR = Path("outputs")
+OUTPUTS_DIR = (Path(__file__).resolve().parent.parent / "outputs").resolve()
 OUTPUTS_DIR.mkdir(exist_ok=True)
 
 

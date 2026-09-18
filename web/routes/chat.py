@@ -11,6 +11,7 @@ so no accidental fallback to a shared account):
                                 http://localhost:11434/v1  (Ollama)
   DASHBOARD_CHAT_API_KEY   your own API key (sk-...)
   DASHBOARD_CHAT_MODEL     e.g. claude-sonnet-4-6 / gpt-4o / kimi-k2
+  DASHBOARD_CHAT_TIMEOUT   per-call HTTP timeout in seconds (default 300)
 
 See docs/DASHBOARD.md for provider-specific setup.
 """
@@ -114,6 +115,16 @@ def _cfg_error_or_none():
     return None
 
 
+def _chat_timeout() -> float:
+    """Per-call HTTP timeout. The worker prompt carries the full SKILL.md
+    (~35k tokens) and may emit up to 4k tokens, so 60 s is too tight for
+    large models behind a gateway."""
+    try:
+        return float(os.environ.get("DASHBOARD_CHAT_TIMEOUT", "300"))
+    except ValueError:
+        return 300.0
+
+
 def _openai_chat(messages, base_url, api_key, model, max_tokens=8192):
     """One-shot call to an OpenAI-compat /v1/chat/completions endpoint."""
     payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
@@ -127,7 +138,7 @@ def _openai_chat(messages, base_url, api_key, model, max_tokens=8192):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=_chat_timeout()) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         return None, f"HTTP {e.code}: {e.read().decode('utf-8', 'ignore')[:200]}"
@@ -150,7 +161,7 @@ def _scene_context(data):
     lines = []
     if scene.get("type") == "indoor" and scene.get("room"):
         r = scene["room"]
-        w, l, h = r.get("width", "?"), r.get("length", "?"), r.get("height", 2.7)
+        w, l, h = r.get("width", "?"), r.get("length", "?"), r.get("height", 3.0)
         furn = r.get("furniture") or []
         lines.append(f"current scene: indoor {w} m × {l} m × {h} m, "
                      f"{len(furn)} furniture items")
@@ -178,6 +189,34 @@ def _scene_context(data):
                      "first before you can move / rotate / remove furniture. "
                      "For a 'build ...' request you must emit set_room_size "
                      "and add_furniture actions.")
+    # Measured coverage results, newest last. This is the ONLY source of
+    # truth for "how did the signal change" questions.
+    hist = data.get("coverage_history") or []
+    if hist:
+        lines.append("coverage results so far (measured by the ray tracer, "
+                     "newest last — quote these numbers; never estimate "
+                     "them when a measurement exists):")
+        for i, c in enumerate(hist[-4:]):
+            tx = c.get("tx") or {}
+            lines.append(
+                f"  run {i+1}: {c.get('freq_ghz', '?')} GHz, AP at "
+                f"({tx.get('x', '?')}, {tx.get('y', '?')}, {tx.get('z', '?')}) m, "
+                f"engine {c.get('engine', '?')}: mean {c.get('mean_dbm', '?')} dBm, "
+                f"min {c.get('min_dbm', '?')} dBm, max {c.get('max_dbm', '?')} dBm, "
+                f"{c.get('coverage_pct', '?')}% of cells above -80 dBm"
+                + (("; per-room mean: " + ", ".join(
+                        f"{k} {v} dBm" for k, v in c["rooms"].items()))
+                   if c.get("rooms") else ""))
+        if len(hist) >= 2:
+            a, b = hist[-2], hist[-1]
+            try:
+                lines.append(f"  latest change in mean RSS: "
+                             f"{float(b['mean_dbm']) - float(a['mean_dbm']):+.1f} dB "
+                             f"(run {min(len(hist),4)-1} -> run {min(len(hist),4)})")
+            except (KeyError, TypeError, ValueError):
+                pass
+    else:
+        lines.append("no coverage has been computed yet in this session.")
     ib = data.get("inside_building")
     sb = data.get("selected_building")
     if ib:
@@ -228,8 +267,12 @@ _WORKER_SYSTEM = (
     "- `remove_furniture` → `{category | index}` — delete one piece.\n"
     "- `set_room_height` → `{height}` (meters) — updates the ceiling / "
     "coverage layer height.\n"
-    "- `set_material` → `{surface: wall|floor|ceiling, material: "
-    "drywall|concrete|wood|glass|brick|marble|itu_metal}`\n"
+    "- `set_material` → `{surface: interior_wall|exterior_wall|wall|floor|"
+    "ceiling, material: plasterboard|brick|concrete|wood|glass|marble|"
+    "metal}`. On a loaded apartment this rewrites the scene's ray-tracing "
+    "materials immediately and coverage is recomputed automatically; use "
+    "`interior_wall` for the partitions between rooms. (plasterboard = "
+    "drywall.)\n"
     "- `configure_antenna` → `{pattern: iso|tr38901, polarization: "
     "V|H|VH, rows, cols, azimuth, elevation}` — changes the WHOLE "
     "antenna. Use this only when the user asks to change the pattern "
@@ -241,6 +284,20 @@ _WORKER_SYSTEM = (
     "(typical -15° to -30° for ceiling APs), positive = uptilt.\n"
     "- `compute_coverage` → `{}` (triggers a fresh coverage run)\n"
     "- `load_scene` → `{scene_id}`\n"
+    "- `create_apartment` → `{rooms: [{id, type, width, depth}, ...], "
+    "name?, height?}` — builds a MULTI-ROOM apartment with interior "
+    "walls, door openings and room-appropriate 3D furniture, then loads "
+    "it. USE THIS whenever the user describes a home / flat / apartment "
+    "with more than one room (e.g. 'two bedrooms, a living room, a "
+    "kitchen and a bathroom'). type must be one of living_room, kitchen, "
+    "bedroom, bathroom, balcony. Sizes in meters; if the user gives none, "
+    "use typical ones (living_room 5x4, kitchen 3x4, bedroom 4x3.5, "
+    "bathroom 2x3.5, balcony 3x2; height 3.0 m unless the user says "
+    "otherwise). Rooms are laid out in a 2-column grid "
+    "in list order, so list living_room first. Give distinct ids "
+    "(bedroom1, bedroom2). Do NOT combine with set_room_size / "
+    "add_furniture — create_apartment already builds and loads "
+    "everything; follow it with compute_coverage only.\n"
     "- `create_outdoor` → `{}`\n"
     "- `fetch_osm` → `{name, lat, lon, radius}`\n\n"
     "Emit action blocks eagerly when the user asks to build / "
@@ -304,10 +361,26 @@ _GENERAL_SYSTEM = (
     "worker's internal reasoning steps.\n"
     "- If the request is under-specified, ask ONE precise follow-up "
     "question at the end.\n"
+    "- Any action blocks the worker emitted are executed automatically by "
+    "the dashboard (including recomputing coverage). NEVER ask 'want me "
+    "to run it?' — state what was done.\n"
+    "- When the worker's output contains measured coverage numbers "
+    "(mean / min / max dBm, coverage %, or a before-vs-after delta), "
+    "report them verbatim. If the user asks how something changed and no "
+    "measurement exists yet, say the new run is in progress and the "
+    "numbers will appear in the stats panel — do not invent values.\n"
     "- Match the language the user wrote in (English → English, "
     "Chinese → Chinese).\n"
     "- Never mention 'worker agent' or 'orchestrator' — those are "
-    "implementation details."
+    "implementation details.\n"
+    "- Describe only what the dashboard actually does: ONE ray-traced "
+    "coverage run per request, reporting whole-scene mean/min/max RSS, "
+    "coverage %, and per-room mean RSS when rooms exist. Do NOT invent "
+    "procedures such as 'two-pass runs', 'bedroom-only slicing', or "
+    "'before/after comparisons being set up' — if a comparison is wanted, "
+    "quote the previous measured run from the context.\n"
+    "- Do NOT claim the AP was placed or coverage was started unless the "
+    "worker actually emitted set_tx_position / compute_coverage."
 )
 
 
@@ -399,6 +472,10 @@ def chat():
         }), 200
 
     base_url, api_key, model = _cfg()
+    # Diagnostic: what the browser believes the measured history is.
+    logger.info("chat: scene=%s coverage_history=%s",
+                (data.get("scene") or {}).get("scene_id"),
+                json.dumps(data.get("coverage_history") or [])[:2000])
     last_user = ""
     for m in reversed(user_msgs):
         if m.get("role") == "user" and m.get("content"):
@@ -407,8 +484,10 @@ def chat():
 
     # Step 1 — worker agent produces technical answer + action blocks.
     worker_msgs = _messages_for_llm(_build_worker_system(data), user_msgs)
+    # 2048 is plenty for action blocks + reasoning; the general agent
+    # summarizes anyway, and halving the cap halves worst-case latency.
     worker_out, err = _openai_chat(worker_msgs, base_url, api_key, model,
-                                    max_tokens=4096)
+                                    max_tokens=2048)
     if err:
         return jsonify({
             "reply": f"[worker error] {err}",

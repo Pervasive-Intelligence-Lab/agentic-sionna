@@ -49,9 +49,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Pervasive-Intelligence-Lab/sionna-skill"
-Repository = "https://github.com/Pervasive-Intelligence-Lab/sionna-skill"
-Paper = "https://github.com/Pervasive-Intelligence-Lab/sionna-skill/blob/main/main.pdf"
+Homepage = "https://github.com/Pervasive-Intelligence-Lab/agentic-sionna"
+Repository = "https://github.com/Pervasive-Intelligence-Lab/agentic-sionna"
+Paper = "https://github.com/Pervasive-Intelligence-Lab/agentic-sionna/blob/main/main.pdf"
 
 [build-system]
 requires = ["setuptools>=64", "wheel"]

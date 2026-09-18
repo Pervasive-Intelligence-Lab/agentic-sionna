@@ -26,7 +26,8 @@ def index():
     # When the key is absent, the chatbox HTML is omitted entirely so
     # users don't see a non-functional input field.
     return render_template("dashboard.html",
-                           chat_enabled=_chat_enabled())
+                           chat_enabled=_chat_enabled(),
+                           chat_model=os.environ.get("DASHBOARD_CHAT_MODEL", ""))
 
 
 @pages_bp.route("/skills")

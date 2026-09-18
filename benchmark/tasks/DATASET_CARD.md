@@ -2,7 +2,7 @@
 
 **Version:** v1.8 (2026-05-01)
 **License:** project-internal; tasks reference Sionna v2.0 (Apache 2.0)
-**Repository:** Pervasive-Intelligence-Lab/sionna-skill
+**Repository:** Pervasive-Intelligence-Lab/agentic-sionna
 
 ## Summary
 

@@ -7,7 +7,7 @@ for the verifier's after-state comparison.
 The 5 GHz "before" reference is reused from benchmark/oracles/n1/.
 
 Run:
-  /home/myid/rs01778/miniconda3/envs/sionna/bin/python \
+  $RF_SIONNA_PY \
       benchmark/_smoke_rt/run_n2_reference.py
 """
 from __future__ import annotations

@@ -171,7 +171,7 @@ has been confirmed by manual review.**
 - **Root cause**: Qwen3.6's `qwen3_coder` parser drops the `content` arg ~40% when the body is large. Skill's "Turn 1: Write skeleton" rule directly hits this weakness.
 - **Fix**: v1.4 dropped `Write` from `CLAUDE_CODE_TOOLS_OVERRIDE` (`Bash,Read` only). Bash + heredoc is single-arg and works on every model.
 - **Source tasks**: U018, U058, U089 (Qwen3.6 v1.2)
-- **Update class**: `[ACTIVE]` — infrastructure-side fix in queue_local_llms.sh
+- **Update class**: `[ACTIVE]` — infrastructure-side fix in the local-LLM serving script (not part of this release)
 
 ### Physics-Realism Tax (T4 system_level)  `[high confidence]`
 - **Symptom**: Skill-loaded agent computes 58% coverage in a corridor; no-skill agent computes 100%. Same numpy code; different parameter choices.

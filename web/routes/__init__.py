@@ -54,7 +54,5 @@ for path, attr in [
     ("routes.catalog", "catalog_bp"),
     ("routes.creation", "creation_bp"),
     ("routes.rays", "rays_bp"),
-    ("routes.ase", "ase_bp"),
-    ("routes.segmentation", "segment_bp"),
 ]:
     _try_register(path, attr)

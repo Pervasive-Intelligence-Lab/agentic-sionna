@@ -4,7 +4,7 @@ End-to-end verification that the v10 fix chain actually drives Sionna RT
 (not FSPL fallback). Run from repo root with the conda env python:
 
 ```bash
-/home/myid/rs01778/miniconda3/envs/sionna/bin/python benchmark/_smoke_rt/run_smoke.py
+$RF_SIONNA_PY benchmark/_smoke_rt/run_smoke.py
 ```
 
 ## What this proves
