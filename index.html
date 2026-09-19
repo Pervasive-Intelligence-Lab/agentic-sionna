@@ -276,6 +276,7 @@
 
     .teaser {
       padding: 0 0 clamp(56px, 7vw, 88px);
+      scroll-margin-top: 76px;
     }
 
     .screen {
@@ -314,6 +315,12 @@
       color: var(--accent);
       font-weight: 600;
       letter-spacing: 0.06em;
+    }
+
+    .figcap a {
+      color: var(--accent);
+      text-decoration: underline;
+      text-underline-offset: 3px;
     }
 
     /* ---------- sections ---------- */
@@ -691,7 +698,7 @@
     </a>
     <div class="nav-links">
       <a href="#system">System</a>
-      <a href="#demo">Demo</a>
+      <a href="#video">Demo</a>
       <a href="#results">Results</a>
       <a class="nav-pdf" href="assets/paper.pdf">Paper PDF</a>
     </div>
@@ -709,19 +716,24 @@
 </p>
       <div class="actions rise rise-5" aria-label="Project links">
         <a class="button primary" href="assets/paper.pdf">Paper PDF</a>
-        <a class="button" href="#demo">View demo</a>
+        <a class="button" href="#video">View demo</a>
         <a class="button" href="https://github.com/Pervasive-Intelligence-Lab/agentic-sionna">Code</a>
         <a class="button" href="#bibtex">BibTeX</a>
       </div>
     </div>
   </header>
 
-  <div class="teaser rise rise-6">
+  <div class="teaser rise rise-6" id="video">
     <div class="wrap">
-      <div class="screen" id="demo-media">
-        <img src="assets/sionna_dashboard.png" alt="AutoNetSim dashboard with a 3D indoor radio scene and coverage heatmap.">
+      <div class="screen">
+        <iframe class="demo-player"
+          src="https://www.youtube.com/embed/vkLyYmXI6p0"
+          title="AutoNetSim Demo: Intent-Driven Wireless Network Experimentation | ICNP 2026"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          referrerpolicy="strict-origin-when-cross-origin"
+          allowfullscreen></iframe>
       </div>
-      <p class="figcap"><b>FIG. 1</b><span>The Sionna-backed dashboard generated from a natural-language intent — editable indoor scene, coverage heatmap, ray paths, and link-level metrics in one workspace.</span></p>
+      <p class="figcap"><b>VIDEO DEMO</b><span>AutoNetSim: intent-driven wireless network experimentation. <a href="https://www.youtube.com/watch?v=vkLyYmXI6p0" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>.</span></p>
     </div>
   </div>
 
@@ -756,20 +768,15 @@
       <div class="wrap">
         <div class="section-head">
           <div>
-            <p class="kicker">Video demo</p>
+            <p class="kicker">Dashboard preview</p>
             <h2>From language to a Sionna-backed radio dashboard.</h2>
           </div>
           <p class="lead">The dashboard lets a user inspect the generated scene, edit furniture and RF parameters, run coverage computation, animate rays, and read BER, PDP, OFDM, and global statistics.</p>
         </div>
         <div class="demo-grid">
           <div class="demo-media">
-            <div class="screen">
-              <iframe class="demo-player"
-                src="https://www.youtube.com/embed/vkLyYmXI6p0"
-                title="AutoNetSim Demo: Intent-Driven Wireless Network Experimentation | ICNP 2026"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                referrerpolicy="strict-origin-when-cross-origin"
-                allowfullscreen></iframe>
+            <div class="screen" id="demo-media">
+              <img src="assets/sionna_dashboard.png" alt="AutoNetSim dashboard with a 3D indoor radio scene and coverage heatmap.">
             </div>
           </div>
           <aside class="demo-panel">
@@ -906,7 +913,7 @@
           .catch(function () { return false; });
       }
 
-      // --- Hero teaser: the first video candidate that exists replaces the image. ---
+      // --- Dashboard preview: the first video candidate that exists replaces the image. ---
       var HERO = ["assets/demo-hero.mp4", "assets/demo.mp4"];
       (function heroSlot(i) {
         if (i >= HERO.length) return;
@@ -916,8 +923,6 @@
           if (!media) return;
           var auto = reduceMotion ? "" : "autoplay muted loop ";
           media.innerHTML = "<video " + auto + 'controls playsinline poster="assets/sionna_dashboard.png"><source src="' + HERO[i] + '" type="video/mp4"></video>';
-          var label = document.querySelector(".teaser .figcap b");
-          if (label) label.textContent = "DEMO 1";
         });
       })(0);
 
