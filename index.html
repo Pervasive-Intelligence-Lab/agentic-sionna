@@ -397,6 +397,14 @@
 
     /* ---------- demo ---------- */
 
+    .demo-player {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border: 0;
+      border-radius: 5px;
+    }
+
     .demo-grid {
       display: grid;
       grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.85fr);
@@ -473,44 +481,6 @@
     }
 
     /* ---------- video slots ---------- */
-
-    .clip-tabs {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 14px;
-    }
-
-    .clip-tabs[hidden] {
-      display: none;
-    }
-
-    .clip-tab {
-      min-height: 34px;
-      padding: 0 14px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      background: transparent;
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 500;
-      letter-spacing: 0.09em;
-      text-transform: uppercase;
-      cursor: pointer;
-      transition: border-color 140ms ease, color 140ms ease;
-    }
-
-    .clip-tab:hover {
-      border-color: var(--accent);
-      color: var(--accent);
-    }
-
-    .clip-tab.active {
-      border-color: var(--accent);
-      background: rgba(12, 107, 112, 0.08);
-      color: var(--accent);
-    }
 
     .slot-block {
       display: none;
@@ -786,17 +756,21 @@
       <div class="wrap">
         <div class="section-head">
           <div>
-            <p class="kicker">Interactive demo</p>
+            <p class="kicker">Video demo</p>
             <h2>From language to a Sionna-backed radio dashboard.</h2>
           </div>
           <p class="lead">The dashboard lets a user inspect the generated scene, edit furniture and RF parameters, run coverage computation, animate rays, and read BER, PDP, OFDM, and global statistics.</p>
         </div>
         <div class="demo-grid">
           <div class="demo-media">
-            <div class="screen" id="clip-stage">
-              <img src="assets/sionna_dashboard.png" alt="Close-up of the dashboard's scene controls and link-level metric panels.">
+            <div class="screen">
+              <iframe class="demo-player"
+                src="https://www.youtube.com/embed/vkLyYmXI6p0"
+                title="AutoNetSim Demo: Intent-Driven Wireless Network Experimentation | ICNP 2026"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerpolicy="strict-origin-when-cross-origin"
+                allowfullscreen></iframe>
             </div>
-            <div class="clip-tabs" id="clip-tabs" hidden role="tablist" aria-label="Demo clips"></div>
           </div>
           <aside class="demo-panel">
             <span class="chip">Dashboard preview</span>
@@ -807,6 +781,7 @@
               <li>Layer toggles for walls, furniture, heatmaps, transmitters, and rays.</li>
               <li>Sionna-backed coverage and ray-tracing computation.</li>
             </ul>
+            <a class="button" href="https://www.youtube.com/watch?v=vkLyYmXI6p0" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
           </aside>
         </div>
       </div>
@@ -945,42 +920,6 @@
           if (label) label.textContent = "DEMO 1";
         });
       })(0);
-
-      // --- Demo section: tabbed clips; a tab appears only when its file exists. ---
-      var CLIPS = [
-        { src: "assets/demo-editing.mp4", label: "Scene editing" },
-        { src: "assets/demo-rf.mp4", label: "RF parameters" },
-        { src: "assets/demo-rays.mp4", label: "Ray tracing" }
-      ];
-      var stage = document.getElementById("clip-stage");
-      var tabs = document.getElementById("clip-tabs");
-
-      function playClip(clip, btn) {
-        var auto = reduceMotion ? "" : "autoplay ";
-        stage.innerHTML = "<video " + auto + 'muted loop controls playsinline><source src="' + clip.src + '" type="video/mp4"></video>';
-        Array.prototype.forEach.call(tabs.children, function (b) {
-          b.classList.toggle("active", b === btn);
-          b.setAttribute("aria-selected", b === btn ? "true" : "false");
-        });
-      }
-
-      if (stage && tabs) {
-        Promise.all(CLIPS.map(function (c) { return exists(c.src); })).then(function (found) {
-          var avail = CLIPS.filter(function (_, i) { return found[i]; });
-          if (!avail.length) return;
-          avail.forEach(function (clip) {
-            var btn = document.createElement("button");
-            btn.className = "clip-tab";
-            btn.type = "button";
-            btn.setAttribute("role", "tab");
-            btn.textContent = clip.label;
-            btn.addEventListener("click", function () { playClip(clip, btn); });
-            tabs.appendChild(btn);
-          });
-          tabs.hidden = false;
-          playClip(avail[0], tabs.children[0]);
-        });
-      }
 
       // --- Standalone blocks that appear once their video exists. ---
       var BLOCKS = [
